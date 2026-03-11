@@ -1,14 +1,1313 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/onopdks/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>pdks-sistemi</title>
-    <script type="module" crossorigin src="/onopdks/assets/index-Cc-R0Thf.js"></script>
-    <link rel="stylesheet" crossorigin href="/onopdks/assets/index-BviU6qZO.css">
-  </head>
-  <body>
-    <div id="root"></div>
-  </body>
-</html>
+import React, { useState, useMemo, useEffect } from 'react';
+import { Upload, FileText, Clock, Users, BarChart2, AlertCircle, Download, Moon, Sun, Eye, EyeOff, AlertTriangle, CheckCircle2, XCircle, LayoutGrid, User, LogOut, Edit2, Save, X, Calendar as CalendarIcon, Calculator, ChevronDown, Plus, MessageSquare, Briefcase, Database, UploadCloud, DownloadCloud } from 'lucide-react';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+
+// --- TÜRKİYE RESMİ TATİLLERİ ---
+const TURKISH_HOLIDAYS = {
+  '01-01': 'Yılbaşı',
+  '04-23': 'Ulusal Egemenlik ve Çocuk Bayramı',
+  '05-01': 'Emek ve Dayanışma Günü',
+  '05-19': 'Atatürk\'ü Anma, Gençlik ve Spor Bayramı',
+  '07-15': 'Demokrasi ve Milli Birlik Günü',
+  '08-30': 'Zafer Bayramı',
+  '10-29': 'Cumhuriyet Bayramı'
+};
+
+const VARIABLE_HOLIDAYS_2026 = {
+    // Dini bayramlar buraya eklenebilir
+};
+
+// --- ÖZEL HEDEF LİSTESİ (8 SAAT) ---
+const SPECIAL_TARGET_EMPLOYEES = [
+  "İzzet Armağan Özsoy", 
+  "Yiğit Yüksel", 
+  "Esin Özdemir"
+];
+
+// --- OVERRIDE (DURUM) TİPLERİ ---
+const OVERRIDE_OPTIONS = [
+    { id: 'NONE', label: 'Yok (Temizle)', category: 'NONE' },
+    { id: 'MANAGER_OK', label: 'Yönetici İnisiyatifi (Uygun Say)', category: 'MANAGER_OK' },
+    { id: 'FULL_DIS', label: 'Dış Görevlendirme (Tam Gün)', category: 'FULL_DAY' },
+    { id: 'FULL_BILKENT', label: 'Bilkent Hane (Tam Gün)', category: 'FULL_DAY' },
+    { id: 'FULL_GAZI', label: 'Gazi Teknopark (Tam Gün)', category: 'FULL_DAY' },
+    { id: 'FULL_YILLIK', label: 'Yıllık İzin (Tam Gün)', category: 'FULL_DAY' },
+    { id: 'FULL_MAZERET', label: 'Mazeret İzni (Tam Gün)', category: 'FULL_DAY' },
+    { id: 'HOUR_DIS', label: 'Dış Görevlendirme (Saatlik)', category: 'HOURLY' },
+    { id: 'HOUR_YOL', label: 'Teknopark Geçiş / Yol (Saatlik)', category: 'HOURLY' },
+    { id: 'HOUR_YILLIK', label: 'Yıllık İzin (Saatlik)', category: 'HOURLY' },
+    { id: 'HOUR_MAZERET', label: 'Mazeret İzni (Saatlik)', category: 'HOURLY' },
+    { id: 'NOTE_ONLY', label: 'Sadece Not / Açıklama', category: 'NOTE' }
+];
+
+// --- STORAGE HELPERS ---
+const loadSavedOverrides = () => {
+    try {
+        const saved = localStorage.getItem('pdks_overrides');
+        return saved ? JSON.parse(saved) : {};
+    } catch (e) {
+        return {};
+    }
+};
+
+const saveOverridesToStorage = (overrides) => {
+    localStorage.setItem('pdks_overrides', JSON.stringify(overrides));
+};
+
+export default function App() {
+  // --- STATE ---
+  const [isDarkMode, setIsDarkMode] = useState(false);
+  const [allMonthsData, setAllMonthsData] = useState({});
+  const [activeMonthKey, setActiveMonthKey] = useState(null); 
+  
+  const [file, setFile] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [selectedEmployee, setSelectedEmployee] = useState(null);
+  const [showWeekends, setShowWeekends] = useState(false);
+  const [viewMode, setViewMode] = useState('overview'); 
+  
+  const [monthlyStats, setMonthlyStats] = useState(null); 
+
+  // --- PERSISTENT OVERRIDES STATE ---
+  const [savedOverrides, setSavedOverrides] = useState(loadSavedOverrides());
+
+  // --- EDIT STATE (İsim Değiştirme) ---
+  const [editingId, setEditingId] = useState(null);
+  const [editName, setEditName] = useState("");
+
+  // --- RECORD MODAL STATE (Günlük Durum Ekleme) ---
+  const [recordModal, setRecordModal] = useState(null);
+
+  // KURAL SABİTLERİ (Varsayılanlar)
+  const RULE_CORE_START = 10 * 3600; 
+  const RULE_CORE_END = 16 * 3600;   
+  
+  // --- DERIVIED DATA ---
+  const currentMonthData = useMemo(() => {
+      if (!activeMonthKey || !allMonthsData[activeMonthKey]) return [];
+      return allMonthsData[activeMonthKey];
+  }, [allMonthsData, activeMonthKey]);
+
+  // --- GENERAL FUNCTIONS ---
+  const handleLogout = () => {
+    setFile(null);
+    setAllMonthsData({});
+    setActiveMonthKey(null);
+    setError(null);
+    setSelectedEmployee(null);
+    setViewMode('overview');
+    setEditingId(null);
+    setMonthlyStats(null);
+  };
+
+  const getDailyTarget = (name) => {
+    const normalizedName = name.toLocaleLowerCase('tr');
+    const isSpecial = SPECIAL_TARGET_EMPLOYEES.some(special => 
+      normalizedName.includes(special.toLocaleLowerCase('tr'))
+    );
+    return isSpecial ? 8 * 3600 : 9 * 3600;
+  };
+
+  // --- BACKUP & RESTORE FUNCTIONS ---
+  const exportOverrides = () => {
+      const dataStr = JSON.stringify(savedOverrides, null, 2);
+      const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+      const exportFileDefaultName = `pdks_islemler_yedek_${new Date().toISOString().slice(0,10)}.json`;
+
+      const linkElement = document.createElement('a');
+      linkElement.setAttribute('href', dataUri);
+      linkElement.setAttribute('download', exportFileDefaultName);
+      linkElement.click();
+  };
+
+  const handleImportOverrides = (event) => {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+          try {
+              const importedData = JSON.parse(e.target.result);
+              const newOverrides = { ...savedOverrides, ...importedData };
+              setSavedOverrides(newOverrides);
+              saveOverridesToStorage(newOverrides);
+              reapplyAllOverrides(newOverrides);
+          } catch (err) {
+              alert("Dosya okuma hatası. Geçerli bir yedek dosyası seçtiğinizden emin olun.");
+          }
+      };
+      reader.readAsText(file);
+      event.target.value = '';
+  };
+
+  const reapplyAllOverrides = (newOverridesObj) => {
+      setAllMonthsData(prev => {
+          const next = { ...prev };
+          Object.keys(next).forEach(monthKey => {
+              next[monthKey] = next[monthKey].map(emp => {
+                  let newTotal = 0;
+                  let newViolations = 0;
+                  const newRecords = emp.records.map(rec => {
+                      const overrideKey = `${emp.id}_${rec.date}`;
+                      const ov = newOverridesObj[overrideKey] || null;
+                      const updatedRec = applyOverrideToRecord(rec, ov, emp.dailyTarget);
+                      newTotal += updatedRec.effectiveWorkSeconds;
+                      newViolations += updatedRec.effectiveViolations.length > 0 ? 1 : 0;
+                      return updatedRec;
+                  });
+                  return { ...emp, records: newRecords, totalSeconds: newTotal, violationCount: newViolations };
+              });
+          });
+          
+          if (selectedEmployee) {
+              const updatedMonth = next[activeMonthKey];
+              if(updatedMonth) {
+                  const updatedEmp = updatedMonth.find(e => e.id === selectedEmployee.id);
+                  if (updatedEmp) setSelectedEmployee(updatedEmp);
+              }
+          }
+          return next;
+      });
+  };
+
+  // --- EDIT FUNCTIONS ---
+  const startEditing = (emp) => {
+    setEditingId(emp.id);
+    setEditName(emp.name);
+  };
+  const cancelEditing = () => {
+    setEditingId(null);
+    setEditName("");
+  };
+  const saveEditing = () => {
+    if (!editName.trim()) { cancelEditing(); return; }
+    const updatedList = currentMonthData.map(emp => {
+      if (emp.id === editingId) return { ...emp, name: editName.trim() };
+      return emp;
+    });
+    setAllMonthsData(prev => ({ ...prev, [activeMonthKey]: updatedList }));
+    if (selectedEmployee && selectedEmployee.id === editingId) {
+      setSelectedEmployee({ ...selectedEmployee, name: editName.trim() });
+    }
+    setEditingId(null);
+    setEditName("");
+  };
+
+  const openRecordModal = (empId, record) => {
+      setRecordModal({
+          empId,
+          date: record.date,
+          day: record.day,
+          rawWork: record.hoursWorked,
+          override: record.override || { typeId: 'NONE', hours: 0, comment: '' }
+      });
+  };
+
+  const closeRecordModal = () => setRecordModal(null);
+
+  const applyOverrideToRecord = (rec, overrideData, dailyTarget) => {
+      let effWorkSecs = rec.workSeconds; 
+      let effViolations = [...rec.violations]; 
+
+      if (!overrideData || overrideData.typeId === 'NONE') {
+          return {
+              ...rec,
+              override: overrideData && overrideData.comment ? overrideData : null,
+              effectiveWorkSeconds: effWorkSecs,
+              effectiveViolations: effViolations
+          };
+      }
+
+      const opt = OVERRIDE_OPTIONS.find(o => o.id === overrideData.typeId);
+      if (!opt) return rec;
+
+      if (opt.category === 'FULL_DAY') {
+          effWorkSecs = dailyTarget;
+          effViolations = []; 
+      } else if (opt.category === 'MANAGER_OK') {
+          effWorkSecs = Math.max(rec.workSeconds, dailyTarget); 
+          effViolations = []; 
+      } else if (opt.category === 'HOURLY') {
+          effWorkSecs += (overrideData.hours * 3600);
+          effViolations = effViolations.filter(v => v !== 'absent');
+          if (effWorkSecs >= dailyTarget) {
+              effViolations = effViolations.filter(v => v !== 'underwork');
+          }
+      } 
+
+      return {
+          ...rec,
+          override: overrideData,
+          effectiveWorkSeconds: effWorkSecs,
+          effectiveViolations: effViolations
+      };
+  };
+
+  const saveRecordOverride = (overrideData) => {
+      if (!recordModal) return;
+      const { empId, date } = recordModal;
+      const overrideKey = `${empId}_${date}`;
+
+      const updatedOverrides = { ...savedOverrides };
+      if (overrideData.typeId === 'NONE' && !overrideData.comment) {
+          delete updatedOverrides[overrideKey];
+      } else {
+          updatedOverrides[overrideKey] = overrideData;
+      }
+      setSavedOverrides(updatedOverrides);
+      saveOverridesToStorage(updatedOverrides);
+
+      setAllMonthsData(prev => {
+          const monthData = prev[activeMonthKey];
+          const updatedMonth = monthData.map(emp => {
+              if(emp.id !== empId) return emp;
+              
+              let newTotalSeconds = 0;
+              let newViolationCount = 0;
+
+              const updatedRecords = emp.records.map(rec => {
+                  if(rec.date !== date) {
+                      newTotalSeconds += rec.effectiveWorkSeconds;
+                      newViolationCount += rec.effectiveViolations.length > 0 ? 1 : 0;
+                      return rec;
+                  }
+                  const updatedRec = applyOverrideToRecord(rec, overrideData, emp.dailyTarget);
+                  newTotalSeconds += updatedRec.effectiveWorkSeconds;
+                  newViolationCount += updatedRec.effectiveViolations.length > 0 ? 1 : 0;
+                  return updatedRec;
+              });
+
+              return { ...emp, records: updatedRecords, totalSeconds: newTotalSeconds, violationCount: newViolationCount };
+          });
+          
+          if (selectedEmployee && selectedEmployee.id === empId) {
+              setSelectedEmployee(updatedMonth.find(e => e.id === empId));
+          }
+          return { ...prev, [activeMonthKey]: updatedMonth };
+      });
+
+      closeRecordModal();
+  };
+
+  // --- ANALYSIS FUNCTIONS ---
+  const handleFileUpload = (event) => {
+    const uploadedFile = event.target.files[0];
+    if (!uploadedFile) return;
+    
+    if (uploadedFile.name.split('.').pop().toLowerCase() !== 'csv') {
+      setError('Lütfen sadece .csv uzantılı dosya yükleyin.');
+      return;
+    }
+
+    setFile(uploadedFile);
+    setLoading(true);
+    setError(null);
+    setSelectedEmployee(null);
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      processCSVData(e.target.result);
+      setLoading(false);
+    };
+    reader.onerror = () => {
+      setError('Dosya okunurken bir hata oluştu.');
+      setLoading(false);
+    };
+    reader.readAsText(uploadedFile);
+    event.target.value = '';
+  };
+
+  const calculateMonthlyTargets = (dateStr) => {
+      const parts = dateStr.split(/[-/]/);
+      if(parts.length < 3) return null;
+      
+      let year, month;
+      if (parts[0].length === 4) {
+          year = parseInt(parts[0], 10);
+          month = parseInt(parts[1], 10) - 1;
+      } else {
+          year = parseInt(parts[2], 10);
+          month = parseInt(parts[1], 10) - 1;
+      }
+      
+      if (isNaN(year) || isNaN(month)) return null;
+
+      const daysInMonth = new Date(year, month + 1, 0).getDate();
+      let weekendCount = 0, holidayCount = 0, workingDays = 0;
+
+      for (let d = 1; d <= daysInMonth; d++) {
+          const currentDay = new Date(year, month, d);
+          const dayOfWeek = currentDay.getDay(); 
+          
+          const monthStr = (month + 1).toString().padStart(2, '0');
+          const dayStr = d.toString().padStart(2, '0');
+          const holidayKey = `${monthStr}-${dayStr}`;
+          
+          const isWknd = dayOfWeek === 0 || dayOfWeek === 6;
+          const isHoliday = TURKISH_HOLIDAYS[holidayKey] || VARIABLE_HOLIDAYS_2026[holidayKey];
+
+          if (isWknd) weekendCount++;
+          else if (isHoliday) holidayCount++;
+          else workingDays++;
+      }
+
+      const monthNames = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"];
+
+      return {
+          monthKey: `${year}-${(month + 1).toString().padStart(2, '0')}`,
+          monthName: monthNames[month],
+          year,
+          totalDays: daysInMonth,
+          weekendDays: weekendCount,
+          holidayDays: holidayCount,
+          targetWorkingDays: workingDays,
+      };
+  };
+
+  const processCSVData = (csvText) => {
+    try {
+      const lines = csvText.split(/\r?\n/);
+      if (lines.length < 2) { setError("CSV dosyası boş veya formatı hatalı."); return; }
+
+      let headerIndex = -1, delimiter = ',';
+      for (let i = 0; i < Math.min(lines.length, 50); i++) {
+        if (lines[i].includes("Row Type") && (lines[i].includes("Date") || lines[i].includes("Tarih"))) {
+          headerIndex = i;
+          const commaCount = (lines[i].match(/,/g) || []).length;
+          const semicolonCount = (lines[i].match(/;/g) || []).length;
+          delimiter = semicolonCount > commaCount ? ';' : ',';
+          break;
+        }
+      }
+
+      if (headerIndex === -1) { throw new Error("CSV formatı tanınamadı. 'Row Type' başlığı bulunamadı."); }
+
+      const headers = parseCSVLine(lines[headerIndex], delimiter);
+      const colMap = {
+        rowType: headers.findIndex(h => h.trim().replace(/['"]+/g, '') === 'Row Type'),
+        date: headers.findIndex(h => {
+           const lower = h.toLowerCase();
+           return (lower.includes('date') || lower.includes('tarih')) && !lower.includes('time');
+        }),
+        day: headers.findIndex(h => h.toLowerCase().includes('day') || h.toLowerCase().includes('gun')),
+        firstIn: headers.findIndex(h => h.toLowerCase().includes('first') || h.toLowerCase().includes('giris')),
+        lastOut: headers.findIndex(h => h.toLowerCase().includes('last') || h.toLowerCase().includes('cikis')),
+        hoursWorked: headers.findIndex(h => (h.toLowerCase().includes('hours') || h.toLowerCase().includes('calisma')) && !h.toLowerCase().includes('to now')),
+      };
+
+      const employeesMap = {};
+      let currentEmployee = null;
+      let firstDateFound = null; 
+
+      for (let i = headerIndex + 1; i < lines.length; i++) {
+        if (!lines[i].trim()) continue;
+        const row = parseCSVLine(lines[i], delimiter);
+        const rowType = row[colMap.rowType]?.replace(/['"]+/g, '');
+
+        if (rowType === '0') {
+           const rawNameString = row[colMap.date];
+           if (rawNameString) {
+              const match = rawNameString.match(/(.*?)\s*\(ID:\s*(\d+)\)/);
+              if (match) {
+                 const name = match[1].trim();
+                 const id = match[2].trim();
+                 const dailyTarget = getDailyTarget(name);
+
+                 currentEmployee = {
+                    id, name, dailyTarget, records: [], totalSeconds: 0, totalDiffSeconds: 0, violationCount: 0
+                 };
+                 employeesMap[id] = currentEmployee;
+              }
+           }
+        } 
+        else if (rowType === '1' && currentEmployee) {
+           const date = row[colMap.date];
+           if (!firstDateFound && date) firstDateFound = date;
+
+           const day = row[colMap.day];
+           const firstIn = row[colMap.firstIn] || "00:00:00";
+           const lastOut = row[colMap.lastOut] || "00:00:00";
+           
+           const firstInSeconds = timeToSeconds(firstIn);
+           const lastOutSeconds = timeToSeconds(lastOut);
+
+           let workSeconds = 0;
+           if (firstInSeconds > 0 && lastOutSeconds > 0 && firstInSeconds !== lastOutSeconds) {
+               if (lastOutSeconds > firstInSeconds) {
+                   workSeconds = lastOutSeconds - firstInSeconds;
+               } else {
+                   workSeconds = (24 * 3600 - firstInSeconds) + lastOutSeconds; 
+               }
+           }
+
+           const h = Math.floor(workSeconds / 3600).toString().padStart(2, '0');
+           const m = Math.floor((workSeconds % 3600) / 60).toString().padStart(2, '0');
+           const s = (workSeconds % 60).toString().padStart(2, '0');
+           const calculatedHoursWorked = `${h}:${m}:${s}`;
+
+           const isWknd = isWeekend(day);
+           const isPresent = firstInSeconds > 0;
+           
+           // Daha sağlam tatil kontrolü için gün ve ay tespiti
+           const parts = date.split(/[-/]/);
+           let dDay, dMonth;
+           if (parts[0].length === 4) { dMonth = parts[1]; dDay = parts[2]; } 
+           else { dDay = parts[0]; dMonth = parts[1]; }
+           
+           const holidayKey = `${dMonth.padStart(2, '0')}-${dDay.padStart(2, '0')}`;
+           const isHoliday = TURKISH_HOLIDAYS[holidayKey] || VARIABLE_HOLIDAYS_2026[holidayKey];
+
+           let violations = [];
+           if (!isWknd && !isHoliday) { 
+             if (!isPresent) violations.push("absent");
+             else {
+                if (firstInSeconds > RULE_CORE_START) violations.push("late");
+                if (lastOutSeconds > 0 && lastOutSeconds < RULE_CORE_END) violations.push("early");
+                if (workSeconds < currentEmployee.dailyTarget) violations.push("underwork");
+             }
+           }
+
+           const rawRecord = {
+             date, day, firstIn, lastOut, 
+             hoursWorked: calculatedHoursWorked, 
+             shiftType: "NORMAL", 
+             workSeconds, 
+             violations,
+             isHoliday: !!isHoliday, holidayName: isHoliday,
+             effectiveWorkSeconds: workSeconds, 
+             effectiveViolations: violations,
+             override: null
+           };
+
+           const overrideKey = `${currentEmployee.id}_${date}`;
+           const savedOverride = savedOverrides[overrideKey] || null;
+           const finalRecord = applyOverrideToRecord(rawRecord, savedOverride, currentEmployee.dailyTarget);
+
+           if (finalRecord.effectiveViolations.length > 0) currentEmployee.violationCount += 1;
+           currentEmployee.totalSeconds += finalRecord.effectiveWorkSeconds;
+           currentEmployee.records.push(finalRecord);
+        }
+      }
+
+      const employeeList = Object.values(employeesMap);
+      if (employeeList.length === 0) { setError("Dosyada geçerli personel kaydı bulunamadı."); return; }
+      
+      if (firstDateFound) {
+          const stats = calculateMonthlyTargets(firstDateFound);
+          if (stats) {
+              setAllMonthsData(prev => ({ ...prev, [stats.monthKey]: employeeList }));
+              setActiveMonthKey(stats.monthKey);
+              setMonthlyStats(stats);
+          } else setError("Tarih formatı algılanamadı.");
+      }
+      setViewMode('overview');
+    } catch (err) {
+      console.error(err);
+      setError("Dosya işlenirken hata: " + err.message);
+    }
+  };
+
+  useMemo(() => {
+      if(activeMonthKey) {
+          const sampleDate = activeMonthKey + '-01';
+          setMonthlyStats(calculateMonthlyTargets(sampleDate));
+      }
+  }, [activeMonthKey]);
+
+  // --- HELPERS ---
+  const parseCSVLine = (text, delimiter) => {
+    const regex = new RegExp(`(?:^|${delimiter})(\"(?:[^\"]+|\"\")*\"|[^${delimiter}]*)`, 'g');
+    let matches = [];
+    let match;
+    while (match = regex.exec(text)){
+        let val = match[1];
+        if (val && val.startsWith('"') && val.endsWith('"')) val = val.slice(1, -1);
+        matches.push(val ? val.trim() : "");
+    }
+    if (matches.length === 0 && !text.includes('"')) return text.split(delimiter);
+    return matches;
+  };
+
+  const timeToSeconds = (timeStr) => {
+    if (!timeStr) return 0;
+    const cleanTime = timeStr.replace(' ', ':');
+    const parts = cleanTime.split(':').map(val => parseInt(val, 10) || 0);
+    if (parts.length < 3) return 0;
+    return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  };
+
+  const formatSeconds = (seconds) => {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    return `${h}s ${m}d`;
+  };
+
+  const isWeekend = (dayStr) => {
+    if (!dayStr) return false;
+    const d = dayStr.toLowerCase();
+    return d.includes('saturday') || d.includes('sunday') || d.includes('cumartesi') || d.includes('pazar');
+  };
+
+  const getEmployeeStats = (emp) => {
+    return emp.records.reduce((acc, rec) => {
+      if (isWeekend(rec.day) || rec.isHoliday) return acc;
+      if (rec.effectiveWorkSeconds > 0) acc.daysWorked += 1;
+      rec.effectiveViolations.forEach(v => {
+        if (v === 'late') acc.lateCount += 1;
+        if (v === 'early') acc.earlyCount += 1;
+        if (v === 'underwork') acc.underworkCount += 1;
+        if (v === 'absent') acc.absentCount += 1;
+      });
+      return acc;
+    }, { daysWorked: 0, lateCount: 0, earlyCount: 0, underworkCount: 0, absentCount: 0 });
+  };
+
+  const filteredRecords = useMemo(() => {
+    if (!selectedEmployee) return [];
+    if (showWeekends) return selectedEmployee.records;
+    return selectedEmployee.records.filter(r => !isWeekend(r.day));
+  }, [selectedEmployee, showWeekends]);
+
+  const filteredTotals = useMemo(() => {
+    if (!selectedEmployee) return { work: 0, diff: 0, violationCount: 0 };
+    const recs = showWeekends ? selectedEmployee.records : filteredRecords;
+    return recs.reduce((acc, curr) => ({
+      work: acc.work + curr.effectiveWorkSeconds,
+      violationCount: acc.violationCount + (curr.effectiveViolations.length > 0 ? 1 : 0)
+    }), { work: 0, diff: 0, violationCount: 0 });
+  }, [filteredRecords, selectedEmployee, showWeekends]);
+
+  const downloadReport = () => {
+    if (!selectedEmployee) return;
+    let csvContent = "data:text/csv;charset=utf-8,\uFEFF"; 
+    csvContent += "Tarih;Gun;Giris;Cikis;Ham Sure;Gecerli Sure;Ihlal Durumu;Ozel Durum / Not\n";
+    selectedEmployee.records.forEach(row => {
+      let violationText = "OK";
+      if (row.isHoliday) {
+          violationText = `RESMİ TATİL (${row.holidayName})`;
+      } else if (row.effectiveViolations.length > 0) {
+        violationText = row.effectiveViolations.map(v => {
+           if(v==='absent') return 'GELMEDİ';
+           if(v==='late') return 'GEÇ KALDI';
+           if(v==='early') return 'ERKEN ÇIKTI';
+           if(v==='underwork') return 'EKSİK SÜRE';
+           return v;
+        }).join(', ');
+      }
+      
+      let noteText = "-";
+      if(row.override) {
+         const opt = OVERRIDE_OPTIONS.find(o => o.id === row.override.typeId);
+         noteText = opt ? opt.label : "Manuel İşlem";
+         if(row.override.hours) noteText += ` (+${row.override.hours} Saat)`;
+         if(row.override.comment) noteText += ` Not: ${row.override.comment.replace(/;/g, ',')}`; 
+      }
+
+      csvContent += `${row.date};${row.day};${row.firstIn};${row.lastOut};${row.hoursWorked};${formatSeconds(row.effectiveWorkSeconds)};${violationText};${noteText}\n`;
+    });
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `${selectedEmployee.name.replace(/\s+/g, '_')}_Analiz.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const downloadOverview = () => {
+     let csvContent = "data:text/csv;charset=utf-8,\uFEFF";
+     csvContent += "Personel;Gecerli Calisma Suresi;Gelinen Gun;Gec Kalma;Erken Cikma;Eksik Sure;Devamsizlik\n";
+     currentMonthData.forEach(emp => {
+        const stats = getEmployeeStats(emp);
+        csvContent += `${emp.name};${formatSeconds(emp.totalSeconds)};${stats.daysWorked};${stats.lateCount};${stats.earlyCount};${stats.underworkCount};${stats.absentCount}\n`;
+     });
+     const encodedUri = encodeURI(csvContent);
+     const link = document.createElement("a");
+     link.setAttribute("href", encodedUri);
+     link.setAttribute("download", `Sirket_Genel_Raporu_${activeMonthKey}.csv`);
+     document.body.appendChild(link);
+     link.click();
+     document.body.removeChild(link);
+  };
+
+  const renderCalendar = (records) => {
+    if (!records || records.length === 0) return null;
+
+    // YENİ ROBUST TARİH ÇÖZÜMLEME (DD/MM/YYYY vs YYYY/MM/DD uyumsuzluğunu çözer)
+    const firstDateStr = records[0].date;
+    const parts = firstDateStr.split(/[-/]/);
+    let year, month;
+    if (parts[0].length === 4) {
+        year = parseInt(parts[0], 10);
+        month = parseInt(parts[1], 10) - 1;
+    } else {
+        year = parseInt(parts[2], 10);
+        month = parseInt(parts[1], 10) - 1;
+    }
+    
+    const monthNames = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"];
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const firstDayIndex = new Date(year, month, 1).getDay(); // 0=Sun, 1=Mon...
+    
+    let startOffset = 0;
+    if (showWeekends) {
+        startOffset = firstDayIndex === 0 ? 6 : firstDayIndex - 1;
+    } else {
+        startOffset = (firstDayIndex === 0 || firstDayIndex === 6) ? 0 : firstDayIndex - 1;
+    }
+
+    const calendarDays = [];
+    for (let i = 0; i < startOffset; i++) { calendarDays.push({ type: 'empty', key: `empty-${i}` }); }
+
+    for (let d = 1; d <= daysInMonth; d++) {
+        const currentDayIndex = new Date(year, month, d).getDay();
+        
+        // Hafta sonlarını showWeekends durumuna göre gizle
+        if (!showWeekends && (currentDayIndex === 0 || currentDayIndex === 6)) {
+            continue; 
+        }
+
+        // KUSURSUZ KAYIT ARAMA (Format fark etmeksizin yılı, ayı, günü eşleştirir)
+        const record = records.find(r => {
+            if (!r.date) return false;
+            const rParts = r.date.split(/[-/]/);
+            if (rParts.length !== 3) return false;
+            let rYear, rMonth, rDay;
+            if (rParts[0].length === 4) {
+                rYear = parseInt(rParts[0], 10); rMonth = parseInt(rParts[1], 10); rDay = parseInt(rParts[2], 10);
+            } else {
+                rDay = parseInt(rParts[0], 10); rMonth = parseInt(rParts[1], 10); rYear = parseInt(rParts[2], 10);
+            }
+            return rYear === year && (rMonth - 1) === month && rDay === d;
+        });
+
+        const monthStr = (month + 1).toString().padStart(2, '0');
+        const dayStr = d.toString().padStart(2, '0');
+        const holidayKey = `${monthStr}-${dayStr}`;
+        const isHoliday = TURKISH_HOLIDAYS[holidayKey] || VARIABLE_HOLIDAYS_2026[holidayKey];
+        
+        let status = 'neutral';
+        let statusText = '';
+        
+        if (isHoliday) {
+            status = 'holiday';
+            statusText = isHoliday.length > 15 ? 'TATİL' : isHoliday.toUpperCase();
+        } else if (record) {
+             const isWknd = isWeekend(record.day);
+             const hasApprovedOverride = record.override && record.override.typeId !== 'NONE' && record.override.typeId !== 'NOTE_ONLY';
+             
+             if (isWknd && record.effectiveWorkSeconds === 0 && !hasApprovedOverride) {
+                 status = 'weekend'; 
+             } else if (record.effectiveViolations.length > 0) {
+                 if (record.effectiveViolations.includes('absent')) {
+                     status = 'danger'; statusText = 'GELMEDİ';
+                 } else if (record.effectiveViolations.includes('underwork') && record.effectiveViolations.length === 1) {
+                     status = 'warning'; statusText = 'EKSİK';
+                 } else {
+                     status = 'danger'; statusText = 'İHLAL';
+                 }
+             } else if (record.effectiveWorkSeconds > 0 || hasApprovedOverride) {
+                 status = 'success'; 
+                 statusText = hasApprovedOverride ? 'ONAYLI' : (isWknd ? 'HS MESAİ' : 'OK');
+             } else {
+                 status = 'neutral';
+             }
+        }
+
+        calendarDays.push({ 
+            type: 'day', dayNumber: d, key: `day-${d}`, record, status, statusText, holidayName: isHoliday
+        });
+    }
+
+    const weekDays = showWeekends 
+        ? ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz']
+        : ['Pzt', 'Sal', 'Çar', 'Per', 'Cum'];
+
+    return (
+        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm animate-in fade-in slide-in-from-bottom-4 transition-colors duration-200">
+            <div className="flex justify-between items-center mb-6">
+                 <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                     <CalendarIcon className="w-5 h-5 text-indigo-500" />
+                     {monthNames[month]} {year} Takvimi
+                 </h3>
+                 <div className="flex flex-wrap gap-2 text-xs">
+                     <span className="flex items-center gap-1 text-slate-600 dark:text-slate-300"><span className="w-2 h-2 rounded-full bg-indigo-500"></span>Onaylı / Bilkent Hane</span>
+                     <span className="flex items-center gap-1 text-slate-600 dark:text-slate-300"><span className="w-2 h-2 rounded-full bg-green-400"></span>Tamam</span>
+                     <span className="flex items-center gap-1 text-slate-600 dark:text-slate-300"><span className="w-2 h-2 rounded-full bg-purple-500"></span>Resmi Tatil</span>
+                     <span className="flex items-center gap-1 text-slate-600 dark:text-slate-300"><span className="w-2 h-2 rounded-full bg-red-500"></span>İhlal/Devamsız</span>
+                     <span className="flex items-center gap-1 text-slate-600 dark:text-slate-300"><span className="w-2 h-2 rounded-full bg-orange-400"></span>Eksik</span>
+                 </div>
+            </div>
+
+            <div className={`grid gap-px bg-slate-200 dark:bg-slate-700 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 transition-colors duration-200 ${showWeekends ? 'grid-cols-7' : 'grid-cols-5'}`}>
+                {weekDays.map(day => (
+                    <div key={day} className="bg-slate-50 dark:bg-slate-900/50 p-2 text-center text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase transition-colors duration-200">
+                        {day}
+                    </div>
+                ))}
+
+                {calendarDays.map((cell) => {
+                    if (cell.type === 'empty') return <div key={cell.key} className="bg-white dark:bg-slate-800 transition-colors duration-200 min-h-[100px]"></div>;
+
+                    const hasOverrideData = cell.record && cell.record.override;
+                    const isApprovedOverride = hasOverrideData && cell.record.override.typeId !== 'NONE' && cell.record.override.typeId !== 'NOTE_ONLY';
+
+                    let bgClass = "bg-white dark:bg-slate-800";
+                    let borderClass = "border-transparent";
+                    if (cell.status === 'holiday') { 
+                        bgClass = "bg-purple-50 dark:bg-purple-900/20"; borderClass = "border-purple-200 dark:border-purple-800/50"; 
+                    } else if (cell.status === 'success') { 
+                        bgClass = isApprovedOverride ? "bg-indigo-50 dark:bg-indigo-900/20" : "bg-green-50 dark:bg-green-900/10"; 
+                        borderClass = isApprovedOverride ? "border-indigo-300 dark:border-indigo-700/50" : "border-green-200 dark:border-green-800/50"; 
+                    } else if (cell.status === 'danger') { 
+                        bgClass = "bg-red-50 dark:bg-red-900/10"; borderClass = "border-red-200 dark:border-red-800/50"; 
+                    } else if (cell.status === 'warning') { 
+                        bgClass = "bg-orange-50 dark:bg-orange-900/10"; borderClass = "border-orange-200 dark:border-orange-800/50"; 
+                    } else if (cell.status === 'weekend') { 
+                        bgClass = "bg-slate-50/50 dark:bg-slate-900/30"; 
+                    }
+
+                    return (
+                        <div key={cell.key} className={`relative ${bgClass} min-h-[100px] p-2 flex flex-col justify-between transition-colors duration-200 cursor-default border-t border-l ${borderClass}`}>
+                            {hasOverrideData && <div className="absolute top-1 right-1 w-2 h-2 rounded-full bg-indigo-500 shadow-sm" title="Özel Durum İşlendi"></div>}
+                            <div className="flex justify-between items-start">
+                                <span className={`text-sm font-bold ${cell.status === 'weekend' ? 'text-slate-300 dark:text-slate-600' : 'text-slate-700 dark:text-slate-200'}`}>
+                                    {cell.dayNumber}
+                                </span>
+                                {cell.statusText && (
+                                    <span className={`text-[10px] px-1 rounded font-bold uppercase truncate max-w-[80px] ${
+                                        cell.status === 'holiday' ? 'bg-purple-200 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300' :
+                                        cell.status === 'success' ? (isApprovedOverride ? 'bg-indigo-200 text-indigo-800 dark:bg-indigo-900/50 dark:text-indigo-300' : 'bg-green-200 text-green-800 dark:bg-green-900/50 dark:text-green-300') :
+                                        cell.status === 'danger' ? 'bg-red-200 text-red-800 dark:bg-red-900/50 dark:text-red-300' :
+                                        cell.status === 'warning' ? 'bg-orange-200 text-orange-800 dark:bg-orange-900/50 dark:text-orange-300' : ''
+                                    }`} title={cell.holidayName || cell.statusText}>
+                                        {cell.statusText}
+                                    </span>
+                                )}
+                            </div>
+                            
+                            {cell.record && cell.status !== 'weekend' && cell.status !== 'neutral' && cell.status !== 'holiday' && (
+                                <div className="mt-2 space-y-1">
+                                    {cell.statusText === 'GELMEDİ' && !hasOverrideData ? (
+                                        <div className="text-[10px] text-red-400 dark:text-red-500 font-medium text-center py-2">Kayıt Yok</div>
+                                    ) : (
+                                        <>
+                                            {(() => {
+                                                const firstInVal = cell.record.firstIn ? cell.record.firstIn.trim() : '';
+                                                const lastOutVal = cell.record.lastOut ? cell.record.lastOut.trim() : '';
+                                                
+                                                const hasValidFirstIn = firstInVal && !['00:00:00', '0:00:00', '00:00', 'NS', '-'].includes(firstInVal);
+                                                const hasValidLastOut = lastOutVal && !['00:00:00', '0:00:00', '00:00', 'NS', '-'].includes(lastOutVal);
+                                                
+                                                if (hasValidFirstIn || hasValidLastOut) {
+                                                    return (
+                                                        <div className="flex justify-between text-[10px] text-slate-500 dark:text-slate-400 font-medium">
+                                                            <span>G: {hasValidFirstIn ? firstInVal.slice(0,5) : 'NS'}</span>
+                                                            <span>Ç: {hasValidLastOut ? lastOutVal.slice(0,5) : 'NS'}</span>
+                                                        </div>
+                                                    );
+                                                } else {
+                                                    return (
+                                                        <div className="text-[10px] text-indigo-700 dark:text-indigo-300 bg-indigo-200 dark:bg-indigo-800/50 rounded py-0.5 px-1 italic text-center font-bold shadow-sm">
+                                                            İzinli / Onaylı
+                                                        </div>
+                                                    );
+                                                }
+                                            })()}
+                                            <div className={`text-xs font-mono font-bold text-center pt-1 border-t ${
+                                                 cell.status === 'danger' ? 'border-red-200 text-red-700 dark:border-red-800/50 dark:text-red-400' :
+                                                 cell.status === 'warning' ? 'border-orange-200 text-orange-700 dark:border-orange-800/50 dark:text-orange-400' :
+                                                 isApprovedOverride ? 'border-indigo-300 text-indigo-800 dark:border-indigo-700/50 dark:text-indigo-500' : 'border-green-200 text-green-700 dark:border-green-800/50 dark:text-green-400'
+                                            }`}>
+                                                {formatSeconds(cell.record.effectiveWorkSeconds)}
+                                            </div>
+                                        </>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    );
+                })}
+            </div>
+        </div>
+    );
+  };
+
+  // --- RECORD MODAL COMPONENT ---
+  const RecordModal = () => {
+      if (!recordModal) return null;
+      
+      const [typeId, setTypeId] = useState(recordModal.override.typeId || 'NONE');
+      const [hours, setHours] = useState(recordModal.override.hours || 0);
+      const [comment, setComment] = useState(recordModal.override.comment || '');
+
+      const selectedOpt = OVERRIDE_OPTIONS.find(o => o.id === typeId);
+      const showHours = selectedOpt && selectedOpt.category === 'HOURLY';
+
+      return (
+          <div className="fixed inset-0 bg-slate-900/40 dark:bg-slate-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
+              <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-700 w-full max-w-md overflow-hidden transition-colors duration-200">
+                  <div className="p-4 bg-slate-50 dark:bg-slate-900/50 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center transition-colors duration-200">
+                      <h3 className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                          <Briefcase className="w-4 h-4 text-indigo-500" />
+                          Günlük Durum Ekle
+                      </h3>
+                      <button onClick={closeRecordModal} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"><X className="w-5 h-5" /></button>
+                  </div>
+                  <div className="p-6 space-y-4">
+                      <div>
+                          <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">Tarih</label>
+                          <div className="text-sm font-medium text-slate-900 dark:text-slate-200 bg-slate-100 dark:bg-slate-700 px-3 py-2 rounded-lg">{recordModal.date} ({recordModal.day})</div>
+                      </div>
+                      
+                      <div>
+                          <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">Özel Durum / İzin Tipi</label>
+                          <select 
+                              value={typeId} 
+                              onChange={(e) => setTypeId(e.target.value)}
+                              className="w-full text-sm bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 focus:outline-none transition-colors duration-200"
+                          >
+                              {OVERRIDE_OPTIONS.map(opt => (
+                                  <option key={opt.id} value={opt.id}>{opt.label}</option>
+                              ))}
+                          </select>
+                      </div>
+
+                      {showHours && (
+                          <div className="animate-in slide-in-from-top-2">
+                              <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">Eklenecek Süre (Saat)</label>
+                              <input 
+                                  type="number" 
+                                  min="0" max="10" step="0.5"
+                                  value={hours}
+                                  onChange={(e) => setHours(parseFloat(e.target.value) || 0)}
+                                  className="w-full text-sm bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 focus:outline-none transition-colors duration-200"
+                                  placeholder="Örn: 1.5"
+                              />
+                          </div>
+                      )}
+
+                      <div>
+                          <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">Yönetici Notu / Açıklama</label>
+                          <textarea 
+                              value={comment}
+                              onChange={(e) => setComment(e.target.value)}
+                              className="w-full text-sm bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 focus:outline-none min-h-[80px] transition-colors duration-200"
+                              placeholder="Kısaca açıklama yazın..."
+                          ></textarea>
+                      </div>
+                  </div>
+                  <div className="p-4 bg-slate-50 dark:bg-slate-900/50 border-t border-slate-100 dark:border-slate-700 flex justify-end gap-3 transition-colors duration-200">
+                      <button onClick={closeRecordModal} className="px-4 py-2 text-sm font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors">İptal</button>
+                      <button onClick={() => saveRecordOverride({ typeId, hours: showHours ? hours : 0, comment })} className="px-4 py-2 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors shadow-sm">Kaydet & Uygula</button>
+                  </div>
+              </div>
+          </div>
+      );
+  };
+
+  return (
+    <div className={`min-h-screen font-sans selection:bg-indigo-100 flex flex-col relative overflow-hidden transition-colors duration-300 ${isDarkMode ? 'dark bg-slate-900 text-slate-100' : 'bg-slate-50 text-slate-800'}`}>
+      <RecordModal />
+
+      <header className="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 sticky top-0 z-20 shadow-sm transition-colors duration-300">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="bg-indigo-600 p-2 rounded-lg shadow-lg shadow-indigo-200 dark:shadow-none">
+              <Clock className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h1 className="text-xl font-bold text-slate-900 dark:text-white leading-tight tracking-tight">PDKS Analiz <span className="text-indigo-600 dark:text-indigo-400">Pro</span></h1>
+              <div className="text-xs text-slate-500 dark:text-slate-400 font-medium">ONO YAZILIM</div>
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-4">
+             {Object.keys(allMonthsData).length > 0 && (
+                 <div className="flex bg-slate-100 dark:bg-slate-700 p-1 rounded-lg transition-colors duration-200">
+                    {Object.keys(allMonthsData).sort().map(monthKey => {
+                        const date = new Date(monthKey + '-01');
+                        const label = date.toLocaleDateString('tr-TR', { month: 'long', year: 'numeric' }).toUpperCase();
+                        return (
+                            <button key={monthKey} onClick={() => setActiveMonthKey(monthKey)} className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${activeMonthKey === monthKey ? 'bg-white dark:bg-slate-600 text-indigo-600 dark:text-indigo-300 shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'}`}>
+                                {label}
+                            </button>
+                        )
+                    })}
+                 </div>
+             )}
+
+             <div className="flex items-center gap-2 border-l border-slate-200 dark:border-slate-700 pl-4 ml-2">
+                 
+                 <div className="relative group">
+                     <button className="flex items-center gap-2 p-2 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors" title="Veritabanı İşlemleri">
+                         <Database className="w-5 h-5" />
+                     </button>
+                     <div className="absolute right-0 top-full pt-2 w-56 hidden group-hover:block z-50">
+                         <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl overflow-hidden">
+                             <div className="px-4 py-3 bg-slate-50 dark:bg-slate-900/50 border-b border-slate-100 dark:border-slate-700 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">
+                                 Notlar & İzinler
+                             </div>
+                             <button onClick={exportOverrides} className="w-full text-left px-4 py-3 text-sm text-slate-700 dark:text-slate-200 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 hover:text-indigo-700 dark:hover:text-indigo-300 transition-colors flex items-center gap-2">
+                                 <DownloadCloud className="w-4 h-4" /> Yedeği İndir (.json)
+                             </button>
+                             <label className="w-full text-left px-4 py-3 text-sm text-slate-700 dark:text-slate-200 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 hover:text-indigo-700 dark:hover:text-indigo-300 transition-colors flex items-center gap-2 cursor-pointer border-t border-slate-100 dark:border-slate-700">
+                                 <UploadCloud className="w-4 h-4" /> Yedeği Yükle
+                                 <input type="file" className="hidden" accept=".json" onChange={handleImportOverrides} />
+                             </label>
+                         </div>
+                     </div>
+                 </div>
+
+                 <button 
+                   onClick={() => setIsDarkMode(!isDarkMode)} 
+                   className="p-2 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
+                   title={isDarkMode ? 'Aydınlık Moda Geç' : 'Karanlık Moda Geç'}
+                 >
+                   {isDarkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+                 </button>
+
+                 {Object.keys(allMonthsData).length > 0 && (
+                   <button onClick={handleLogout} className="flex items-center gap-2 text-slate-500 dark:text-slate-400 hover:text-red-600 dark:hover:text-red-400 p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors text-sm font-medium" title="Tümünü Sıfırla">
+                     <LogOut className="w-5 h-5" />
+                   </button>
+                 )}
+             </div>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
+           {currentMonthData.length > 0 && (
+             <div className="flex justify-between items-end mb-6">
+                 <div className="relative group">
+                    <input type="file" accept=".csv" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20" />
+                    <button className="flex items-center gap-2 bg-slate-900 dark:bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-slate-800 dark:hover:bg-indigo-700 transition-colors shadow-sm">
+                        <Plus className="w-4 h-4" /> Yeni Ay Yükle (.csv)
+                    </button>
+                 </div>
+
+                 <div className="flex bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-1 rounded-lg transition-colors duration-200">
+                    <button onClick={() => setViewMode('overview')} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${viewMode === 'overview' ? 'bg-indigo-50 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'}`}>
+                      <LayoutGrid className="w-3.5 h-3.5" /> Genel Bakış
+                    </button>
+                    <button onClick={() => { setViewMode('detail'); if(!selectedEmployee) setSelectedEmployee(currentMonthData[0]); }} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${viewMode === 'detail' ? 'bg-indigo-50 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'}`}>
+                      <User className="w-3.5 h-3.5" /> Personel Detay
+                    </button>
+                 </div>
+             </div>
+           )}
+
+           {Object.keys(allMonthsData).length === 0 && (
+            <div className="max-w-xl mx-auto mt-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
+              <div className="bg-white dark:bg-slate-800 p-10 rounded-3xl shadow-xl shadow-slate-200/60 dark:shadow-none border border-slate-100 dark:border-slate-700 text-center relative overflow-hidden transition-colors duration-300">
+                <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500"></div>
+                <div className="w-20 h-20 bg-indigo-50 dark:bg-slate-700 rounded-2xl flex items-center justify-center mx-auto mb-6 transform transition-transform hover:scale-110 duration-300 border border-indigo-100 dark:border-slate-600">
+                  <FileText className="w-10 h-10 text-indigo-600 dark:text-indigo-400" />
+                </div>
+                <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-3">PDKS CSV Dosyasını Yükleyin</h2>
+                <p className="text-slate-500 dark:text-slate-400 mb-8 leading-relaxed max-w-sm mx-auto">Sistemden aldığınız .csv formatındaki raporu yükleyin.</p>
+                <div className="relative group inline-block w-full sm:w-auto">
+                  <input type="file" accept=".csv" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20" />
+                  <button className="w-full sm:w-auto bg-slate-900 dark:bg-indigo-600 hover:bg-slate-800 dark:hover:bg-indigo-700 active:bg-slate-700 text-white px-8 py-4 rounded-xl font-semibold shadow-lg shadow-slate-900/20 dark:shadow-none transition-all flex items-center justify-center gap-2 group-hover:-translate-y-1">
+                    <Upload className="w-5 h-5" /> CSV Yükle
+                  </button>
+                </div>
+                {loading && <div className="mt-8 text-indigo-600 dark:text-indigo-400 text-sm font-medium animate-pulse">Veriler analiz ediliyor...</div>}
+                {error && <div className="mt-8 p-4 bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-800 text-red-700 dark:text-red-400 text-sm rounded-xl flex items-start gap-3 text-left"><AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" /><div><span className="font-bold block mb-1">Hata</span>{error}</div></div>}
+              </div>
+            </div>
+           )}
+
+           {currentMonthData.length > 0 && viewMode === 'overview' && (
+              <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden animate-in fade-in transition-colors duration-200">
+                  <div className="p-6 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50/50 dark:bg-slate-900/30">
+                    <div>
+                       <h3 className="font-bold text-lg text-slate-800 dark:text-slate-100">Personel Genel Durumu</h3>
+                       <p className="text-slate-500 dark:text-slate-400 text-xs">Aylık hedef ve fiili gerçekleşen (İzinler dahil)</p>
+                    </div>
+                    <button onClick={downloadOverview} className="bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-600 px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-2 transition-colors">
+                        <Download className="w-3.5 h-3.5" /> CSV İndir
+                    </button>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm text-left">
+                       <thead className="bg-slate-50 dark:bg-slate-900 text-slate-500 dark:text-slate-400 font-semibold text-xs uppercase tracking-wider border-b border-slate-200 dark:border-slate-700">
+                          <tr>
+                             <th className="px-6 py-4">Personel</th>
+                             <th className="px-6 py-4 text-center">Toplam Geçerli Süre</th>
+                             <th className="px-6 py-4 text-center">Gün</th>
+                             <th className="px-6 py-4 text-center text-red-600 dark:text-red-400">Geç</th>
+                             <th className="px-6 py-4 text-center text-red-600 dark:text-red-400">Erken</th>
+                             <th className="px-6 py-4 text-center text-orange-600 dark:text-orange-400">Eksik</th>
+                             <th className="px-6 py-4 text-center text-red-600 dark:text-red-400">Devamsız</th>
+                             <th className="px-6 py-4 text-right"></th>
+                          </tr>
+                       </thead>
+                       <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+                          {currentMonthData.map((emp) => {
+                             const stats = getEmployeeStats(emp);
+                             const isEditing = editingId === emp.id;
+
+                             return (
+                                <tr key={emp.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors group">
+                                   <td className="px-6 py-4 font-medium text-slate-900 dark:text-slate-200 group-hover:text-indigo-900 dark:group-hover:text-indigo-300">
+                                      {isEditing ? (
+                                        <div className="flex items-center gap-2 animate-in fade-in zoom-in duration-200">
+                                          <input type="text" value={editName} onChange={(e) => setEditName(e.target.value)} className="border border-indigo-300 dark:border-indigo-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 w-full max-w-[150px]" autoFocus onKeyDown={(e) => { if (e.key === 'Enter') saveEditing(); if (e.key === 'Escape') cancelEditing(); }} onClick={(e) => e.stopPropagation()} />
+                                          <button onClick={(e) => { e.stopPropagation(); saveEditing(); }} className="text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/30 p-1 rounded"><Save size={14} /></button>
+                                          <button onClick={(e) => { e.stopPropagation(); cancelEditing(); }} className="text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 p-1 rounded"><X size={14} /></button>
+                                        </div>
+                                      ) : (
+                                        <div className="flex items-center justify-between group/edit">
+                                          <span>{emp.name}</span>
+                                          <button onClick={(e) => { e.stopPropagation(); startEditing(emp); }} className="opacity-0 group-hover/edit:opacity-100 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 p-1 transition-opacity" title="İsmi Düzenle"><Edit2 size={12} /></button>
+                                        </div>
+                                      )}
+                                   </td>
+                                   <td className="px-6 py-4 text-center font-mono text-slate-600 dark:text-slate-400 font-semibold">{formatSeconds(emp.totalSeconds)}</td>
+                                   <td className="px-6 py-4 text-center font-bold text-slate-700 dark:text-slate-300">{stats.daysWorked}</td>
+                                   <td className="px-6 py-4 text-center">{stats.lateCount > 0 ? <span className="bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 px-2 py-1 rounded text-xs font-bold">{stats.lateCount}</span> : <span className="text-slate-300 dark:text-slate-600">-</span>}</td>
+                                   <td className="px-6 py-4 text-center">{stats.earlyCount > 0 ? <span className="bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 px-2 py-1 rounded text-xs font-bold">{stats.earlyCount}</span> : <span className="text-slate-300 dark:text-slate-600">-</span>}</td>
+                                   <td className="px-6 py-4 text-center">{stats.underworkCount > 0 ? <span className="bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300 px-2 py-1 rounded text-xs font-bold">{stats.underworkCount}</span> : <span className="text-slate-300 dark:text-slate-600">-</span>}</td>
+                                   <td className="px-6 py-4 text-center">{stats.absentCount > 0 ? <span className="bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 px-2 py-1 rounded text-xs font-bold ring-1 ring-red-200 dark:ring-red-800">{stats.absentCount}</span> : <span className="text-slate-300 dark:text-slate-600">-</span>}</td>
+                                   <td className="px-6 py-4 text-right">
+                                      <button onClick={() => { setSelectedEmployee(emp); setViewMode('detail'); }} className="text-indigo-600 dark:text-indigo-400 hover:underline text-xs font-medium">Detay &rarr;</button>
+                                   </td>
+                                </tr>
+                             );
+                          })}
+                       </tbody>
+                    </table>
+                 </div>
+              </div>
+           )}
+
+           {currentMonthData.length > 0 && viewMode === 'detail' && (
+             <div className="flex flex-col lg:flex-row gap-8 animate-in fade-in">
+               <div className="w-full lg:w-80 flex-shrink-0">
+                  <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden sticky top-24 flex flex-col max-h-[calc(100vh-8rem)] transition-colors duration-200">
+                     <div className="p-4 border-b border-slate-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/30">
+                        <h3 className="font-bold text-slate-700 dark:text-slate-200 text-sm">Personel Listesi ({currentMonthData.length})</h3>
+                     </div>
+                     <div className="overflow-y-auto flex-1 p-2 space-y-1">
+                        {currentMonthData.map((emp) => {
+                           const isEditing = editingId === emp.id;
+                           return (
+                             <div key={emp.id} className="px-2">
+                               {isEditing ? (
+                                  <div className="w-full p-2 bg-indigo-50 dark:bg-indigo-900/30 rounded-xl flex items-center gap-2 border border-indigo-200 dark:border-indigo-700 shadow-sm animate-in fade-in zoom-in duration-200">
+                                      <input type="text" value={editName} onChange={(e) => setEditName(e.target.value)} className="w-full text-xs p-1.5 border border-indigo-300 dark:border-indigo-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded focus:outline-none focus:ring-2 focus:ring-indigo-500" autoFocus onKeyDown={(e) => { if (e.key === 'Enter') saveEditing(); if (e.key === 'Escape') cancelEditing(); }} onClick={(e) => e.stopPropagation()} />
+                                      <button onClick={(e) => { e.stopPropagation(); saveEditing(); }} className="text-green-600 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-900/50 p-1 rounded"><Save size={14} /></button>
+                                      <button onClick={(e) => { e.stopPropagation(); cancelEditing(); }} className="text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/50 p-1 rounded"><X size={14} /></button>
+                                  </div>
+                               ) : (
+                                  <button onClick={() => setSelectedEmployee(emp)} className={`w-full text-left p-3 rounded-xl transition-all group/item relative ${selectedEmployee?.id === emp.id ? 'bg-slate-900 dark:bg-indigo-600 text-white' : 'hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300'}`}>
+                                    <div className="flex justify-between items-center">
+                                       <span className="font-semibold truncate text-sm flex-1">{emp.name}</span>
+                                       <div className="flex items-center gap-2">
+                                          {emp.violationCount > 0 && <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${selectedEmployee?.id === emp.id ? 'bg-red-500 text-white' : 'bg-red-100 text-red-600 dark:bg-red-900/50 dark:text-red-400'}`}>{emp.violationCount}</span>}
+                                          <div onClick={(e) => { e.stopPropagation(); startEditing(emp); }} className={`p-1 rounded cursor-pointer transition-opacity ${selectedEmployee?.id === emp.id ? 'text-slate-400 hover:text-white' : 'text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 opacity-0 group-hover/item:opacity-100'}`} title="İsmi Düzenle"><Edit2 size={12} /></div>
+                                       </div>
+                                    </div>
+                                  </button>
+                               )}
+                             </div>
+                           );
+                        })}
+                     </div>
+                  </div>
+               </div>
+               <div className="flex-1 min-w-0 space-y-6">
+                 {selectedEmployee && (
+                   <>
+                     {/* AYLIK HEDEF KARTI */}
+                     {monthlyStats && (
+                       <div className="bg-gradient-to-r from-indigo-500 to-purple-600 dark:from-indigo-700 dark:to-purple-800 rounded-2xl p-6 text-white shadow-lg animate-in fade-in slide-in-from-top-2">
+                          <div className="flex justify-between items-center">
+                              <div>
+                                  <div className="text-indigo-100 text-sm font-medium mb-1 uppercase tracking-wider flex items-center gap-2">
+                                      <Calculator className="w-4 h-4" /> {monthlyStats.monthName} {monthlyStats.year} Hedefi
+                                  </div>
+                                  <div className="text-3xl font-bold flex items-baseline gap-2">
+                                      {monthlyStats.targetWorkingDays} <span className="text-base font-normal opacity-80">Gün</span> 
+                                      <span className="mx-2 opacity-50">/</span>
+                                      {monthlyStats.targetWorkingDays * (selectedEmployee.dailyTarget / 3600)} <span className="text-base font-normal opacity-80">Saat</span>
+                                  </div>
+                                  <div className="text-xs text-indigo-200 mt-1">
+                                      {selectedEmployee.dailyTarget === 8 * 3600 ? "(Günlük 8 Saat Hedefi)" : "(Günlük 9 Saat Hedefi)"}
+                                  </div>
+                              </div>
+                              <div className="text-right text-sm opacity-90">
+                                  <div>Toplam Gün: <strong>{monthlyStats.totalDays}</strong></div>
+                                  <div>Hafta Sonu: <strong>{monthlyStats.weekendDays}</strong></div>
+                                  <div>Resmi Tatil: <strong>{monthlyStats.holidayDays}</strong></div>
+                              </div>
+                          </div>
+                       </div>
+                     )}
+
+                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm transition-colors duration-200">
+                           <div className="text-slate-500 dark:text-slate-400 text-xs font-bold uppercase mb-1">Toplam Geçerli Süre</div>
+                           <div className="text-2xl font-bold text-slate-900 dark:text-white">{formatSeconds(filteredTotals.work)}</div>
+                        </div>
+                        <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm transition-colors duration-200">
+                           <div className="text-slate-500 dark:text-slate-400 text-xs font-bold uppercase mb-1">İhlal / Devamsızlık</div>
+                           <div className={`text-2xl font-bold ${filteredTotals.violationCount > 0 ? 'text-red-700 dark:text-red-400' : 'text-slate-900 dark:text-white'}`}>{filteredTotals.violationCount}</div>
+                        </div>
+                        <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm transition-colors duration-200">
+                           <div className="text-slate-500 dark:text-slate-400 text-xs font-bold uppercase mb-1">Hedef Uyumu</div>
+                           {monthlyStats ? (
+                               <>
+                                   <div className="text-2xl font-bold text-slate-900 dark:text-white">
+                                      {Math.round((filteredTotals.work / ((monthlyStats.targetWorkingDays * (selectedEmployee.dailyTarget / 3600)) * 3600)) * 100) || 0}%
+                                   </div>
+                                   <div className="w-full bg-slate-100 dark:bg-slate-700 h-1.5 mt-2 rounded-full overflow-hidden">
+                                      <div className="bg-green-500 h-full rounded-full" style={{width: `${Math.min(100, Math.round((filteredTotals.work / ((monthlyStats.targetWorkingDays * (selectedEmployee.dailyTarget / 3600)) * 3600)) * 100))}%`}}></div>
+                                   </div>
+                               </>
+                           ) : (
+                               <div className="text-slate-400 text-sm">Hesaplanıyor...</div>
+                           )}
+                        </div>
+                        <button onClick={downloadReport} className="bg-slate-900 dark:bg-indigo-600 text-white p-5 rounded-2xl shadow-sm flex flex-col items-center justify-center gap-2 hover:bg-slate-800 dark:hover:bg-indigo-700 transition-all">
+                           <Download className="w-6 h-6 text-indigo-400 dark:text-indigo-200" />
+                           <span className="text-sm font-semibold">Detay İndir</span>
+                        </button>
+                     </div>
+
+                     {renderCalendar(selectedEmployee.records)}
+
+                     <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm transition-colors duration-200">
+                       <div className="flex justify-between items-center mb-6">
+                          <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><BarChart2 className="w-5 h-5 text-indigo-500" />Çalışma Analizi (Geçerli Süreler)</h3>
+                          <button onClick={() => setShowWeekends(!showWeekends)} className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold ${showWeekends ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300' : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300'}`}>
+                            {showWeekends ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />} Hafta Sonu
+                          </button>
+                       </div>
+                       <div className="h-72 w-full">
+                         <ResponsiveContainer width="100%" height="100%">
+                           <BarChart data={filteredRecords}>
+                             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={isDarkMode ? "#334155" : "#e2e8f0"} />
+                             <XAxis dataKey="date" tickFormatter={(val) => val.split('/')[2] || val.split('-')[2]} interval={0} tick={{fontSize: 10, fill: isDarkMode ? "#94a3b8" : "#64748b"}} axisLine={false} tickLine={false} dy={10} />
+                             <YAxis tickFormatter={(val) => `${Math.floor(val / 3600)}s`} tick={{fontSize: 11, fill: isDarkMode ? "#94a3b8" : "#64748b"}} axisLine={false} tickLine={false} />
+                             <Tooltip 
+                                contentStyle={{ backgroundColor: isDarkMode ? '#1e293b' : '#fff', borderColor: isDarkMode ? '#334155' : '#e2e8f0', color: isDarkMode ? '#f1f5f9' : '#0f172a' }}
+                                formatter={(value, name, props) => props.payload.isHoliday ? ['TATİL', 'Durum'] : props.payload.effectiveViolations.includes('absent') ? ['KART BASILMADI', 'Durum'] : [`${(value / 3600).toFixed(2)} Saat`, 'Geçerli Süre']} 
+                             />
+                             <Bar dataKey="effectiveWorkSeconds" fill="#6366f1" radius={[4, 4, 0, 0]} />
+                           </BarChart>
+                         </ResponsiveContainer>
+                       </div>
+                     </div>
+
+                     {/* DETAY TABLOSU */}
+                     <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden transition-colors duration-200">
+                       <div className="overflow-x-auto">
+                         <table className="w-full text-sm text-left">
+                           <thead className="bg-slate-50 dark:bg-slate-900/50 text-slate-500 dark:text-slate-400 font-semibold text-xs uppercase tracking-wider">
+                             <tr>
+                               <th className="px-6 py-4">Tarih</th>
+                               <th className="px-6 py-4">Ham Giriş / Çıkış</th>
+                               <th className="px-6 py-4">Geçerli Süre</th>
+                               <th className="px-6 py-4">Durum</th>
+                               <th className="px-6 py-4 text-right">İşlem / Özel Not</th>
+                             </tr>
+                           </thead>
+                           <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
+                             {filteredRecords.map((record, idx) => {
+                               const firstInVal = record.firstIn ? record.firstIn.trim() : '';
+                               const lastOutVal = record.lastOut ? record.lastOut.trim() : '';
+                               
+                               const hasValidFirstIn = firstInVal && !['00:00:00', '0:00:00', '00:00', 'NS', '-'].includes(firstInVal);
+                               const hasValidLastOut = lastOutVal && !['00:00:00', '0:00:00', '00:00', 'NS', '-'].includes(lastOutVal);
+                               
+                               const isApprovedOverride = record.override && record.override.typeId !== 'NONE' && record.override.typeId !== 'NOTE_ONLY';
+                               
+                               return (
+                                 <tr key={idx} className={`hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors ${record.isHoliday ? 'bg-purple-50/30 dark:bg-purple-900/10' : record.effectiveViolations.length > 0 ? 'bg-red-50/20 dark:bg-red-900/10' : ''}`}>
+                                   <td className="px-6 py-3 whitespace-nowrap">
+                                     <div className="font-mono text-slate-700 dark:text-slate-300 font-medium">{record.date}</div>
+                                     <div className="text-xs text-slate-400 dark:text-slate-500">{record.day}</div>
+                                   </td>
+                                   <td className="px-6 py-3">
+                                     {(!hasValidFirstIn && !hasValidLastOut) ? (
+                                        isApprovedOverride ? (
+                                            <span className="text-xs text-indigo-600 dark:text-indigo-400 font-bold italic bg-indigo-50 dark:bg-indigo-900/30 px-2 py-1 rounded">İzinli / Onaylı</span>
+                                        ) : (
+                                            <span className="text-xs text-slate-400 dark:text-slate-500 italic">Kayıt Yok</span>
+                                        )
+                                     ) : (
+                                        <div className="flex flex-col gap-1">
+                                          <div className="flex items-center gap-2">
+                                            <span className="text-xs text-slate-400 dark:text-slate-500 w-8">IN:</span>
+                                            <span className={`font-mono text-xs px-1.5 py-0.5 rounded ${record.violations.includes('late') ? 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400 font-bold' : 'text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-700'}`}>{hasValidFirstIn ? firstInVal : 'NS'}</span>
+                                          </div>
+                                          <div className="flex items-center gap-2">
+                                            <span className="text-xs text-slate-400 dark:text-slate-500 w-8">OUT:</span>
+                                            <span className={`font-mono text-xs px-1.5 py-0.5 rounded ${record.violations.includes('early') ? 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400 font-bold' : 'text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-700'}`}>{hasValidLastOut ? lastOutVal : 'NS'}</span>
+                                          </div>
+                                        </div>
+                                     )}
+                                   </td>
+                                   <td className="px-6 py-3">
+                                      <div className={`font-mono font-bold ${record.effectiveViolations.includes('underwork') ? 'text-orange-600 dark:text-orange-400' : 'text-green-600 dark:text-green-400'}`}>
+                                          {formatSeconds(record.effectiveWorkSeconds)}
+                                      </div>
+                                      {record.override && record.override.hours > 0 && (
+                                          <div className="text-[10px] text-indigo-500 dark:text-indigo-400 font-medium">+{record.override.hours}s Eklendi</div>
+                                      )}
+                                   </td>
+                                   <td className="px-6 py-3">
+                                     <div className="flex flex-col gap-1 items-start">
+                                       {record.isHoliday ? (
+                                           <span className="text-xs font-bold text-purple-600 dark:text-purple-400">{record.holidayName}</span>
+                                       ) : record.effectiveViolations.length > 0 ? (
+                                         <>
+                                           {record.effectiveViolations.includes('absent') && <span className="text-xs font-bold text-red-600 dark:text-red-400 flex items-center gap-1"><XCircle className="w-3 h-3"/> DEVAMSIZ</span>}
+                                           {record.effectiveViolations.includes('late') && <span className="text-xs font-bold text-red-600 dark:text-red-400">GEÇ</span>}
+                                           {record.effectiveViolations.includes('early') && <span className="text-xs font-bold text-red-600 dark:text-red-400">ERKEN</span>}
+                                           {record.effectiveViolations.includes('underwork') && <span className="text-xs font-bold text-orange-600 dark:text-orange-400">EKSİK</span>}
+                                         </>
+                                       ) : record.effectiveWorkSeconds > 0 || isApprovedOverride ? (
+                                         <span className="text-xs font-medium text-green-600 dark:text-green-400 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Uygun</span>
+                                       ) : <span className="text-xs text-slate-300 dark:text-slate-600">-</span>}
+                                     </div>
+                                   </td>
+                                   <td className="px-6 py-3 text-right">
+                                      <div className="flex flex-col items-end gap-2">
+                                          {record.override && record.override.typeId !== 'NONE' && (
+                                              <div className="flex flex-col items-end gap-0.5 mb-1 group relative cursor-help">
+                                                  <span className="px-2 py-0.5 bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 rounded text-[10px] font-bold border border-indigo-200 dark:border-indigo-700 inline-flex items-center gap-1">
+                                                      {OVERRIDE_OPTIONS.find(o => o.id === record.override.typeId)?.label}
+                                                  </span>
+                                                  {record.override.comment && (
+                                                      <span className="text-[10px] text-slate-500 dark:text-slate-400 italic max-w-[150px] truncate" title={record.override.comment}>
+                                                          "{record.override.comment}"
+                                                      </span>
+                                                  )}
+                                              </div>
+                                          )}
+                                          <button onClick={() => openRecordModal(selectedEmployee.id, record)} className="text-xs flex items-center gap-1 px-3 py-1.5 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-300 font-medium rounded-lg transition-colors border border-slate-200 dark:border-slate-600">
+                                              <Edit2 className="w-3 h-3" /> {record.override ? 'Düzenle' : 'İşlem/Not Ekle'}
+                                          </button>
+                                      </div>
+                                   </td>
+                                 </tr>
+                               );
+                             })}
+                           </tbody>
+                         </table>
+                       </div>
+                     </div>
+                   </>
+                 )}
+               </div>
+             </div>
+           )}
+      </main>
+    </div>
+  );
+}
